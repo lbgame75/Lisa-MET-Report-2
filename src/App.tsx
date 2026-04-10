@@ -950,7 +950,7 @@ Write in clear paragraphs. The final report should read exactly like something L
 
         setGeneratedReport(reportText);
 
-      } else {
+      } else if (selectedModel === 'chatgpt') {
         // --- ChatGPT ---
         const response = await openai.chat.completions.create({
           model: 'gpt-4o',
