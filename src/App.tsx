@@ -1,6 +1,10 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * UPDATED: Added Claude (default) + ChatGPT model selector.
+ * Gemini retained only for audio transcription.
+ * Changes marked with // *** ADDED *** or // *** CHANGED ***
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -39,6 +43,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from "@google/genai";
+import Anthropic from '@anthropic-ai/sdk';           // *** ADDED ***
+import OpenAI from 'openai';                          // *** ADDED ***
 import * as pdfjsLib from 'pdfjs-dist';
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString();
 import mammoth from 'mammoth';
@@ -108,6 +114,9 @@ interface Student {
   updatedAt: any;
   ownerId: string;
 }
+
+// *** ADDED: Type for model selection ***
+type ModelChoice = 'claude' | 'chatgpt';
 
 enum OperationType {
   CREATE = 'create',
@@ -242,12 +251,33 @@ function METApp() {
   const [hiddenLibraryIds, setHiddenLibraryIds] = useState<string[]>([]);
   const [recordingTarget, setRecordingTarget] = useState<'brainDump' | 'clinicalDirection' | 'refinementInput'>('brainDump');
 
+  // *** ADDED: Model selection state — Claude is the default ***
+  const [selectedModel, setSelectedModel] = useState<ModelChoice>('claude');
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const chatSessionRef = useRef<any>(null);
+  const chatSessionRef = useRef<any>(null); // kept for Gemini refinement fallback
 
-  // --- Gemini Initialization ---
+  // *** ADDED: Shared conversation history for Claude & ChatGPT multi-turn refinement ***
+  const conversationHistoryRef = useRef<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  // *** ADDED: Store system prompt so refinement can reuse it ***
+  const systemPromptRef = useRef<string>('');
+
+  // --- API Client Initialization ---
+  // Gemini — kept for audio transcription only
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+
+  // *** ADDED: Claude client ***
+  const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    dangerouslyAllowBrowser: true,
+  });
+
+  // *** ADDED: OpenAI (ChatGPT) client ***
+  const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY || '',
+    dangerouslyAllowBrowser: true,
+  });
 
   // --- Auth Effect ---
   useEffect(() => {
@@ -312,7 +342,6 @@ function METApp() {
         }
       }
       
-      // Filter out user items that are duplicates of default items by name and category
       const filteredUserItems = items.filter(i => 
         !DEFAULT_LIBRARY.some(def => 
           def.name.toLowerCase() === i.name.toLowerCase() && def.category === i.category
@@ -347,7 +376,6 @@ function METApp() {
         });
       }
 
-      // Filter out user items that are duplicates of default items by name and category
       const filteredUserItems = items.filter(i => 
         !DEFAULT_LIBRARY.some(def => 
           def.name.toLowerCase() === i.name.toLowerCase() && def.category === i.category
@@ -496,7 +524,6 @@ function METApp() {
     setCurrentStudentId(student.id);
     setStudentName(student.name);
     
-    // Smart name splitting for legacy records
     if (!student.firstName && !student.lastName && student.name) {
       const parts = student.name.trim().split(/\s+/);
       if (parts.length > 1) {
@@ -581,12 +608,9 @@ function METApp() {
         }
       }
     } else {
-      // For unauthenticated users, we store their custom items in local storage
       const currentCustom = JSON.parse(localStorage.getItem('met_library') || '[]');
       const updatedCustom = [...currentCustom, ...newItems.map(i => ({ ...i, ownerId: 'local' }))];
       localStorage.setItem('met_library', JSON.stringify(updatedCustom));
-      
-      // Update state immediately
       setLibraryItems(prev => [...prev, ...newItems.map(i => ({ ...i, ownerId: 'local' }))]);
     }
     showStatus(`Imported ${newItems.length} items successfully`, "success");
@@ -617,27 +641,23 @@ function METApp() {
     if (!confirm("⚠️ WIPE ALL UPLOADED FILES?\n\nThis will permanently delete all your custom library items and restore the default settings. This cannot be undone. Are you sure?")) return;
 
     setIsSaving(true);
-    // Force clear UI immediately
     setLibraryItems(DEFAULT_LIBRARY);
     setHiddenLibraryIds([]);
-    setSelectedItems(['v-lisa', 'i-std', 'i-source']); // Reset to basic defaults
+    setSelectedItems(['v-lisa', 'i-std', 'i-source']);
     
     try {
       if (user) {
-        // Delete custom items from Firestore
         const q = query(collection(db, 'library'), where('ownerId', '==', user.uid));
         const snapshot = await getDocs(q);
         const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
         await Promise.all(deletePromises);
 
-        // Clear hidden items from Firestore
         const hq = query(collection(db, 'hidden_library_items'), where('userId', '==', user.uid));
         const hSnapshot = await getDocs(hq);
         const hDeletePromises = hSnapshot.docs.map(d => deleteDoc(d.ref));
         await Promise.all(hDeletePromises);
       }
       
-      // Clear all local storage
       localStorage.removeItem('met_library');
       localStorage.removeItem('met_hidden_library');
       
@@ -662,10 +682,8 @@ function METApp() {
     if (user) {
       try {
         if (item.ownerId === user.uid) {
-          // It's our own item, delete it permanently
           await deleteDoc(doc(db, 'library', item.id));
         } else {
-          // It's a default or shared item, hide it
           await addDoc(collection(db, 'hidden_library_items'), {
             userId: user.uid,
             itemId: item.id,
@@ -677,17 +695,14 @@ function METApp() {
         handleFirestoreError(error, OperationType.DELETE, `library/${item.id}`);
       }
     } else {
-      // Unauthenticated
       if (isDefault) {
         const newHidden = [...hiddenLibraryIds, item.id];
         setHiddenLibraryIds(newHidden);
         localStorage.setItem('met_hidden_library', JSON.stringify(newHidden));
       } else {
-        // Custom item in local storage
         const current = JSON.parse(localStorage.getItem('met_library') || '[]');
         const updated = current.filter((i: any) => i.id !== item.id);
         localStorage.setItem('met_library', JSON.stringify(updated));
-        // Update state immediately
         setLibraryItems(prev => prev.filter(i => i.id !== item.id));
       }
       showStatus("Item removed", "success");
@@ -727,9 +742,10 @@ function METApp() {
     }
   };
 
+  // Audio transcription stays on Gemini — it's uniquely good at this
   const transcribeAudio = async (blob: Blob, target: 'brainDump' | 'clinicalDirection' | 'refinementInput') => {
     setIsTranscribing(true);
-    showStatus("Transcribing audio with Gemini...");
+    showStatus("Transcribing audio...");
     try {
       const reader = new FileReader();
       reader.readAsDataURL(blob);
@@ -840,9 +856,10 @@ function METApp() {
     return result.data.text;
   };
 
+  // *** CHANGED: generateReport now routes to Claude (default) or ChatGPT ***
   const generateReport = async () => {
     setIsGenerating(true);
-    showStatus("Generating report...");
+    showStatus(`Generating report with ${selectedModel === 'claude' ? 'Claude' : 'ChatGPT'}...`);
 
     try {
       const selectedVoice = libraryItems.filter(i => i.category === 'voice' && selectedItems.includes(i.id)).map(i => i.content).join("\n");
@@ -852,7 +869,7 @@ function METApp() {
       const selectedReferences = libraryItems.filter(i => i.category === 'references' && selectedItems.includes(i.id)).map(i => i.content).join("\n");
       const sourceData = extractedFiles.map(f => `File: ${f.name}\nContent: ${f.content}`).join("\n\n");
 
-      const prompt = `
+      const userPrompt = `
 === CLINICAL DIRECTION ===
 ${clinicalDirection || "No specific clinical direction provided."}
 
@@ -887,10 +904,8 @@ INSTRUCTION:
    - Format in Markdown with clear paragraphs.
 `;
 
-      const chat = ai.chats.create({
-        model: "gemini-3.1-pro-preview",
-        config: {
-          systemInstruction: `
+      // *** ADDED: System prompt stored in ref so refinement can reuse it ***
+      const systemPrompt = `
 You are helping Lisa Work, a school psychologist, write Multidisciplinary Evaluation Team (MET) reports.
 You write in Lisa's authentic voice and follow her MET framework exactly.
 
@@ -906,19 +921,59 @@ PRIORITIES IN THIS EXACT ORDER:
    - No words like "reflects", "furthermore", "notably", "highlights", "additionally", "appears", "consistent with".
 
 Write in clear paragraphs. The final report should read exactly like something Lisa would write herself.
-`,
+`;
+      systemPromptRef.current = systemPrompt;
+
+      // *** CHANGED: Route to Claude or ChatGPT ***
+      if (selectedModel === 'claude') {
+        // --- Claude ---
+        const response = await anthropic.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 8000,
           temperature: 0.4,
-          topP: 1.0,
-        }
-      });
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userPrompt }],
+        });
 
-      chatSessionRef.current = chat;
-      const response = await chat.sendMessage({ message: prompt });
+        const reportText = response.content
+          .filter(block => block.type === 'text')
+          .map(block => (block as any).text)
+          .join('');
 
-      setGeneratedReport(response.text || "");
+        // Store history for multi-turn refinement
+        conversationHistoryRef.current = [
+          { role: 'user', content: userPrompt },
+          { role: 'assistant', content: reportText },
+        ];
+        chatSessionRef.current = null; // clear any previous Gemini session
+
+        setGeneratedReport(reportText);
+
+      } else {
+        // --- ChatGPT ---
+        const response = await openai.chat.completions.create({
+          model: 'gpt-4o',
+          temperature: 0.4,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+        });
+
+        const reportText = response.choices[0].message.content || '';
+
+        // Store history for multi-turn refinement
+        conversationHistoryRef.current = [
+          { role: 'user', content: userPrompt },
+          { role: 'assistant', content: reportText },
+        ];
+        chatSessionRef.current = null;
+
+        setGeneratedReport(reportText);
+      }
+
       showStatus("Report generated!", "success");
       
-      // Auto-save if we have a student selected
       if (currentStudentId) {
         saveStudent(false);
       }
@@ -930,22 +985,82 @@ Write in clear paragraphs. The final report should read exactly like something L
     }
   };
 
+  // *** CHANGED: refineReport now routes to Claude or ChatGPT ***
   const refineReport = async () => {
-    if (!chatSessionRef.current || !refinementInput.trim()) return;
+    if (!refinementInput.trim()) return;
+    if (conversationHistoryRef.current.length === 0 && !chatSessionRef.current) return;
 
     setIsRefining(true);
-    showStatus("Refining report...");
+    showStatus(`Refining with ${selectedModel === 'claude' ? 'Claude' : 'ChatGPT'}...`);
+
+    const refinementMessage = `REFINEMENT INSTRUCTION: ${refinementInput}\n\nUpdate the report based on this instruction while maintaining all previous rules and voice lock.`;
 
     try {
-      const response = await chatSessionRef.current.sendMessage({ 
-        message: `REFINEMENT INSTRUCTION: ${refinementInput}\n\nUpdate the report based on this instruction while maintaining all previous rules and voice lock.` 
-      });
+      if (selectedModel === 'claude') {
+        // --- Claude refinement ---
+        const messages = [
+          ...conversationHistoryRef.current,
+          { role: 'user' as const, content: refinementMessage },
+        ];
 
-      setGeneratedReport(response.text || "");
+        const response = await anthropic.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 8000,
+          temperature: 0.4,
+          system: systemPromptRef.current,
+          messages,
+        });
+
+        const refined = response.content
+          .filter(block => block.type === 'text')
+          .map(block => (block as any).text)
+          .join('');
+
+        conversationHistoryRef.current = [
+          ...messages,
+          { role: 'assistant', content: refined },
+        ];
+
+        setGeneratedReport(refined);
+
+      } else if (selectedModel === 'chatgpt') {
+        // --- ChatGPT refinement ---
+        const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+          { role: 'system', content: systemPromptRef.current },
+          ...conversationHistoryRef.current.map(m => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+          })),
+          { role: 'user', content: refinementMessage },
+        ];
+
+        const response = await openai.chat.completions.create({
+          model: 'gpt-4o',
+          temperature: 0.4,
+          messages,
+        });
+
+        const refined = response.choices[0].message.content || '';
+
+        conversationHistoryRef.current = [
+          ...conversationHistoryRef.current,
+          { role: 'user', content: refinementMessage },
+          { role: 'assistant', content: refined },
+        ];
+
+        setGeneratedReport(refined);
+
+      } else if (chatSessionRef.current) {
+        // Fallback: legacy Gemini session still active
+        const response = await chatSessionRef.current.sendMessage({ 
+          message: `REFINEMENT INSTRUCTION: ${refinementInput}\n\nUpdate the report based on this instruction while maintaining all previous rules and voice lock.` 
+        });
+        setGeneratedReport(response.text || "");
+      }
+
       setRefinementInput('');
       showStatus("Report refined!", "success");
 
-      // Auto-save if we have a student selected
       if (currentStudentId) {
         saveStudent(false);
       }
@@ -978,7 +1093,6 @@ Write in clear paragraphs. The final report should read exactly like something L
       }
     } catch (err) {
       console.error("Share error:", err);
-      // Fallback to clipboard if share fails or is cancelled
       await navigator.clipboard.writeText(window.location.href);
       showStatus("App link copied to clipboard!", "success");
     }
@@ -1023,7 +1137,6 @@ Write in clear paragraphs. The final report should read exactly like something L
       const studentFolderName = `MET Reports - ${studentName || 'Unnamed Student'}`;
       let folderId = '';
 
-      // 1. Search for existing folder
       const searchResponse = await fetch(`https://www.googleapis.com/drive/v3/files?q=name='${studentFolderName.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and trashed=false`, {
         headers: { 'Authorization': `Bearer ${currentToken}` }
       });
@@ -1032,7 +1145,6 @@ Write in clear paragraphs. The final report should read exactly like something L
       if (searchResult.files && searchResult.files.length > 0) {
         folderId = searchResult.files[0].id;
       } else {
-        // 2. Create folder if not found
         const createFolderResponse = await fetch('https://www.googleapis.com/drive/v3/files', {
           method: 'POST',
           headers: {
@@ -1048,7 +1160,6 @@ Write in clear paragraphs. The final report should read exactly like something L
         folderId = folderResult.id;
       }
 
-      // 3. Create the Google Doc inside the folder
       const fileName = `MET_Report_Section_${new Date().toISOString().split('T')[0]}`;
       
       const htmlContent = `
@@ -1102,6 +1213,7 @@ Write in clear paragraphs. The final report should read exactly like something L
       setIsDriveExporting(false);
     }
   };
+
   const downloadReport = () => {
     const blob = new Blob([generatedReport], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -1116,11 +1228,9 @@ Write in clear paragraphs. The final report should read exactly like something L
 
   const toggleItem = (id: string, category: LibraryItem['category']) => {
     if (category === 'voice') {
-      // Single select for voice
       const categoryIds = libraryItems.filter(i => i.category === category).map(i => i.id);
       setSelectedItems(prev => [...prev.filter(i => !categoryIds.includes(i)), id]);
     } else {
-      // Multi select for others (including instructions now)
       setSelectedItems(prev => 
         prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
       );
@@ -1207,6 +1317,35 @@ Write in clear paragraphs. The final report should read exactly like something L
         </div>
         
         <div className="flex items-center gap-4">
+
+          {/* *** ADDED: Model selector toggle *** */}
+          <div className="flex items-center gap-1 bg-white/15 rounded-full p-1 border border-white/20">
+            <button
+              onClick={() => setSelectedModel('claude')}
+              className={cn(
+                "px-3 py-1 rounded-full text-xs font-bold transition-all",
+                selectedModel === 'claude'
+                  ? "bg-white text-sage-700 shadow-sm"
+                  : "text-white/70 hover:text-white"
+              )}
+              title="Use Claude (default — best voice fidelity)"
+            >
+              Claude
+            </button>
+            <button
+              onClick={() => setSelectedModel('chatgpt')}
+              className={cn(
+                "px-3 py-1 rounded-full text-xs font-bold transition-all",
+                selectedModel === 'chatgpt'
+                  ? "bg-white text-sage-700 shadow-sm"
+                  : "text-white/70 hover:text-white"
+              )}
+              title="Use ChatGPT (GPT-4o)"
+            >
+              ChatGPT
+            </button>
+          </div>
+
           <AnimatePresence>
             {statusMessage && (
               <motion.div
@@ -1561,7 +1700,6 @@ Write in clear paragraphs. The final report should read exactly like something L
               </div>
             </div>
 
-            {/* File List */}
             {extractedFiles.length > 0 && (
               <div className="mt-4 space-y-2">
                 {extractedFiles.map(file => (
@@ -1594,7 +1732,10 @@ Write in clear paragraphs. The final report should read exactly like something L
               ) : (
                 <Wand2 className="w-5 h-5" />
               )}
-              {isGenerating ? "Synthesizing Report..." : "Generate Report Section"}
+              {/* *** CHANGED: button label shows active model *** */}
+              {isGenerating
+                ? `${selectedModel === 'claude' ? 'Claude' : 'ChatGPT'} is writing...`
+                : `Generate with ${selectedModel === 'claude' ? 'Claude' : 'ChatGPT'}`}
             </button>
             
             <button
@@ -1620,35 +1761,43 @@ Write in clear paragraphs. The final report should read exactly like something L
           <div className="h-14 border-b border-sage-200 flex items-center justify-between px-8 shrink-0 bg-white">
             <div className="flex items-center gap-2 text-sage-700">
               <FileText className="w-4 h-4" />
-              <span className="text-sm font-bold">Generated Output</span>
+              {/* *** CHANGED: show active model in output header *** */}
+              <span className="text-sm font-bold">
+                Generated Output
+                {generatedReport && (
+                  <span className="ml-2 text-[10px] font-normal text-sage-400 uppercase tracking-wider">
+                    via {selectedModel === 'claude' ? 'Claude' : 'ChatGPT'}
+                  </span>
+                )}
+              </span>
             </div>
             
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={copyToClipboard}
-                  disabled={!generatedReport}
-                  className="p-2 text-sage-600 hover:bg-sage-50 rounded-lg transition-all disabled:opacity-30"
-                  title="Copy to Clipboard"
-                >
-                  <Copy className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={exportToDrive}
-                  disabled={!generatedReport || isDriveExporting}
-                  className="p-2 text-sage-600 hover:bg-sage-50 rounded-lg transition-all disabled:opacity-30"
-                  title="Save to Google Drive"
-                >
-                  {isDriveExporting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
-                </button>
-                <button
-                  onClick={downloadReport}
-                  disabled={!generatedReport}
-                  className="p-2 text-sage-600 hover:bg-sage-50 rounded-lg transition-all disabled:opacity-30"
-                  title="Download as TXT"
-                >
-                  <Download className="w-4 h-4" />
-                </button>
-                <div className="w-px h-4 bg-sage-200 mx-1" />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={copyToClipboard}
+                disabled={!generatedReport}
+                className="p-2 text-sage-600 hover:bg-sage-50 rounded-lg transition-all disabled:opacity-30"
+                title="Copy to Clipboard"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
+              <button
+                onClick={exportToDrive}
+                disabled={!generatedReport || isDriveExporting}
+                className="p-2 text-sage-600 hover:bg-sage-50 rounded-lg transition-all disabled:opacity-30"
+                title="Save to Google Drive"
+              >
+                {isDriveExporting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={downloadReport}
+                disabled={!generatedReport}
+                className="p-2 text-sage-600 hover:bg-sage-50 rounded-lg transition-all disabled:opacity-30"
+                title="Download as TXT"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+              <div className="w-px h-4 bg-sage-200 mx-1" />
               <button
                 onClick={generateReport}
                 disabled={!generatedReport || isGenerating}
@@ -1677,7 +1826,10 @@ Write in clear paragraphs. The final report should read exactly like something L
                       <div className="w-12 h-12 border-4 border-sage-200 border-t-sage-600 rounded-full animate-spin" />
                       <Wand2 className="w-5 h-5 text-sage-600 absolute inset-0 m-auto" />
                     </div>
-                    <p className="text-sm font-medium text-sage-600 animate-pulse">Gemini is writing...</p>
+                    {/* *** CHANGED: dynamic loading text *** */}
+                    <p className="text-sm font-medium text-sage-600 animate-pulse">
+                      {selectedModel === 'claude' ? 'Claude' : 'ChatGPT'} is writing...
+                    </p>
                   </div>
                 </div>
               )}
@@ -2022,7 +2174,7 @@ Write in clear paragraphs. The final report should read exactly like something L
               </div>
               
               <div className="p-6 bg-sage-50 border-t border-sage-100 flex justify-center">
-                <p className="text-[10px] text-sage-400">MET Report Writer v1.2.0 • Built for Lisa Work</p>
+                <p className="text-[10px] text-sage-400">MET Report Writer v1.3.0 • Built for Lisa Work</p>
               </div>
             </motion.div>
           </div>
