@@ -116,7 +116,7 @@ interface Student {
 }
 
 // *** ADDED: Type for model selection ***
-type ModelChoice = 'claude' | 'chatgpt';
+type ModelChoice = 'claude' | 'chatgpt' | 'gemini';
 
 enum OperationType {
   CREATE = 'create',
@@ -265,17 +265,17 @@ function METApp() {
 
   // --- API Client Initialization ---
   // Gemini — kept for audio transcription only
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+  const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY || '' });
 
   // *** ADDED: Claude client ***
   const anthropic = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    apiKey: import.meta.env.VITE_ANTHROPIC_API_KEY || '',
     dangerouslyAllowBrowser: true,
   });
 
   // *** ADDED: OpenAI (ChatGPT) client ***
   const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY || '',
+    apiKey: import.meta.env.VITE_OPENAI_API_KEY || '',
     dangerouslyAllowBrowser: true,
   });
 
@@ -859,7 +859,8 @@ function METApp() {
   // *** CHANGED: generateReport now routes to Claude (default) or ChatGPT ***
   const generateReport = async () => {
     setIsGenerating(true);
-    showStatus(`Generating report with ${selectedModel === 'claude' ? 'Claude' : 'ChatGPT'}...`);
+    const modelLabel = selectedModel === 'claude' ? 'Claude' : selectedModel === 'chatgpt' ? 'ChatGPT' : 'Gemini';
+    showStatus(`Generating report with ${modelLabel}...`);
 
     try {
       const selectedVoice = libraryItems.filter(i => i.category === 'voice' && selectedItems.includes(i.id)).map(i => i.content).join("\n");
@@ -970,6 +971,20 @@ Write in clear paragraphs. The final report should read exactly like something L
         chatSessionRef.current = null;
 
         setGeneratedReport(reportText);
+      } else {
+        // --- Gemini ---
+        const chat = ai.chats.create({
+          model: "gemini-2.0-flash",
+          config: {
+            systemInstruction: systemPrompt,
+            temperature: 0.4,
+            topP: 1.0,
+          }
+        });
+        chatSessionRef.current = chat;
+        conversationHistoryRef.current = [];
+        const response = await chat.sendMessage({ message: userPrompt });
+        setGeneratedReport(response.text || "");
       }
 
       showStatus("Report generated!", "success");
@@ -991,7 +1006,7 @@ Write in clear paragraphs. The final report should read exactly like something L
     if (conversationHistoryRef.current.length === 0 && !chatSessionRef.current) return;
 
     setIsRefining(true);
-    showStatus(`Refining with ${selectedModel === 'claude' ? 'Claude' : 'ChatGPT'}...`);
+    showStatus(`Refining with ${selectedModel === 'claude' ? 'Claude' : selectedModel === 'chatgpt' ? 'ChatGPT' : 'Gemini'}...`);
 
     const refinementMessage = `REFINEMENT INSTRUCTION: ${refinementInput}\n\nUpdate the report based on this instruction while maintaining all previous rules and voice lock.`;
 
@@ -1343,6 +1358,18 @@ Write in clear paragraphs. The final report should read exactly like something L
               title="Use ChatGPT (GPT-4o)"
             >
               ChatGPT
+            </button>
+            <button
+              onClick={() => setSelectedModel('gemini')}
+              className={cn(
+                "px-3 py-1 rounded-full text-xs font-bold transition-all",
+                selectedModel === 'gemini'
+                  ? "bg-white text-sage-700 shadow-sm"
+                  : "text-white/70 hover:text-white"
+              )}
+              title="Gemini (original)"
+            >
+              Gemini
             </button>
           </div>
 
@@ -1734,8 +1761,8 @@ Write in clear paragraphs. The final report should read exactly like something L
               )}
               {/* *** CHANGED: button label shows active model *** */}
               {isGenerating
-                ? `${selectedModel === 'claude' ? 'Claude' : 'ChatGPT'} is writing...`
-                : `Generate with ${selectedModel === 'claude' ? 'Claude' : 'ChatGPT'}`}
+                ? `${selectedModel === 'claude' ? 'Claude' : selectedModel === 'chatgpt' ? 'ChatGPT' : 'Gemini'} is writing...`
+                : `Generate with ${selectedModel === 'claude' ? 'Claude' : selectedModel === 'chatgpt' ? 'ChatGPT' : 'Gemini'}`}
             </button>
             
             <button
@@ -1766,7 +1793,7 @@ Write in clear paragraphs. The final report should read exactly like something L
                 Generated Output
                 {generatedReport && (
                   <span className="ml-2 text-[10px] font-normal text-sage-400 uppercase tracking-wider">
-                    via {selectedModel === 'claude' ? 'Claude' : 'ChatGPT'}
+                    via {selectedModel === 'claude' ? 'Claude' : selectedModel === 'chatgpt' ? 'ChatGPT' : 'Gemini'}
                   </span>
                 )}
               </span>
@@ -1828,7 +1855,7 @@ Write in clear paragraphs. The final report should read exactly like something L
                     </div>
                     {/* *** CHANGED: dynamic loading text *** */}
                     <p className="text-sm font-medium text-sage-600 animate-pulse">
-                      {selectedModel === 'claude' ? 'Claude' : 'ChatGPT'} is writing...
+                      {selectedModel === 'claude' ? 'Claude' : selectedModel === 'chatgpt' ? 'ChatGPT' : 'Gemini'} is writing...
                     </p>
                   </div>
                 </div>
