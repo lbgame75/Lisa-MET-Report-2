@@ -4,7 +4,7 @@
  *
  * UPDATED: Added Claude (default) + ChatGPT model selector.
  * Gemini retained only for audio transcription.
- * Changes marked with // *** ADDED *** or // *** CHANGED ***
+ * API calls for Claude and ChatGPT route through /api/generate proxy (CORS fix).
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -43,8 +43,6 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from "@google/genai";
-import Anthropic from '@anthropic-ai/sdk';           // *** ADDED ***
-import OpenAI from 'openai';                          // *** ADDED ***
 import * as pdfjsLib from 'pdfjs-dist';
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString();
 import mammoth from 'mammoth';
@@ -115,7 +113,6 @@ interface Student {
   ownerId: string;
 }
 
-// *** ADDED: Type for model selection ***
 type ModelChoice = 'claude' | 'chatgpt' | 'gemini';
 
 enum OperationType {
@@ -251,33 +248,21 @@ function METApp() {
   const [hiddenLibraryIds, setHiddenLibraryIds] = useState<string[]>([]);
   const [recordingTarget, setRecordingTarget] = useState<'brainDump' | 'clinicalDirection' | 'refinementInput'>('brainDump');
 
-  // *** ADDED: Model selection state — Claude is the default ***
+  // Model selection state — Claude is the default
   const [selectedModel, setSelectedModel] = useState<ModelChoice>('claude');
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const chatSessionRef = useRef<any>(null); // kept for Gemini refinement fallback
+  const chatSessionRef = useRef<any>(null);
 
-  // *** ADDED: Shared conversation history for Claude & ChatGPT multi-turn refinement ***
+  // Shared conversation history for multi-turn refinement
   const conversationHistoryRef = useRef<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
-  // *** ADDED: Store system prompt so refinement can reuse it ***
+  // Store system prompt so refinement can reuse it
   const systemPromptRef = useRef<string>('');
 
   // --- API Client Initialization ---
   // Gemini — kept for audio transcription only
   const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY || '' });
-
-  // *** ADDED: Claude client ***
-  const anthropic = new Anthropic({
-    apiKey: import.meta.env.VITE_ANTHROPIC_API_KEY || '',
-    dangerouslyAllowBrowser: true,
-  });
-
-  // *** ADDED: OpenAI (ChatGPT) client ***
-  const openai = new OpenAI({
-    apiKey: import.meta.env.VITE_OPENAI_API_KEY || '',
-    dangerouslyAllowBrowser: true,
-  });
 
   // --- Auth Effect ---
   useEffect(() => {
@@ -742,7 +727,7 @@ function METApp() {
     }
   };
 
-  // Audio transcription stays on Gemini — it's uniquely good at this
+  // Audio transcription stays on Gemini
   const transcribeAudio = async (blob: Blob, target: 'brainDump' | 'clinicalDirection' | 'refinementInput') => {
     setIsTranscribing(true);
     showStatus("Transcribing audio...");
@@ -753,7 +738,7 @@ function METApp() {
         const base64Audio = (reader.result as string).split(',')[1];
         
         const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
+          model: "gemini-2.0-flash",
           contents: [
             {
               parts: [
@@ -856,7 +841,26 @@ function METApp() {
     return result.data.text;
   };
 
-  // *** CHANGED: generateReport now routes to Claude (default) or ChatGPT ***
+  // Helper: call our Vercel proxy for Claude and ChatGPT
+  const callGenerateProxy = async (
+    model: 'claude' | 'chatgpt',
+    systemPrompt: string,
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>
+  ): Promise<string> => {
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, systemPrompt, messages }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `API error ${res.status}`);
+    }
+    const data = await res.json();
+    return data.text || '';
+  };
+
+  // generateReport routes to Claude, ChatGPT, or Gemini
   const generateReport = async () => {
     setIsGenerating(true);
     const modelLabel = selectedModel === 'claude' ? 'Claude' : selectedModel === 'chatgpt' ? 'ChatGPT' : 'Gemini';
@@ -905,7 +909,6 @@ INSTRUCTION:
    - Format in Markdown with clear paragraphs.
 `;
 
-      // *** ADDED: System prompt stored in ref so refinement can reuse it ***
       const systemPrompt = `
 You are helping Lisa Work, a school psychologist, write Multidisciplinary Evaluation Team (MET) reports.
 You write in Lisa's authentic voice and follow her MET framework exactly.
@@ -925,54 +928,26 @@ Write in clear paragraphs. The final report should read exactly like something L
 `;
       systemPromptRef.current = systemPrompt;
 
-      // *** CHANGED: Route to Claude or ChatGPT ***
+      let reportText = '';
+
       if (selectedModel === 'claude') {
-        // --- Claude ---
-        const response = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 8000,
-          temperature: 0.4,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: userPrompt }],
-        });
-
-        const reportText = response.content
-          .filter(block => block.type === 'text')
-          .map(block => (block as any).text)
-          .join('');
-
-        // Store history for multi-turn refinement
-        conversationHistoryRef.current = [
-          { role: 'user', content: userPrompt },
-          { role: 'assistant', content: reportText },
-        ];
-        chatSessionRef.current = null; // clear any previous Gemini session
-
-        setGeneratedReport(reportText);
-
-      } else if (selectedModel === 'chatgpt') {
-        // --- ChatGPT ---
-        const response = await openai.chat.completions.create({
-          model: 'gpt-4o',
-          temperature: 0.4,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-        });
-
-        const reportText = response.choices[0].message.content || '';
-
-        // Store history for multi-turn refinement
+        reportText = await callGenerateProxy('claude', systemPrompt, [{ role: 'user', content: userPrompt }]);
         conversationHistoryRef.current = [
           { role: 'user', content: userPrompt },
           { role: 'assistant', content: reportText },
         ];
         chatSessionRef.current = null;
 
-        setGeneratedReport(reportText);
+      } else if (selectedModel === 'chatgpt') {
+        reportText = await callGenerateProxy('chatgpt', systemPrompt, [{ role: 'user', content: userPrompt }]);
+        conversationHistoryRef.current = [
+          { role: 'user', content: userPrompt },
+          { role: 'assistant', content: reportText },
+        ];
+        chatSessionRef.current = null;
+
       } else {
-        // --- Gemini ---
+        // Gemini
         const chat = ai.chats.create({
           model: "gemini-2.0-flash",
           config: {
@@ -984,9 +959,10 @@ Write in clear paragraphs. The final report should read exactly like something L
         chatSessionRef.current = chat;
         conversationHistoryRef.current = [];
         const response = await chat.sendMessage({ message: userPrompt });
-        setGeneratedReport(response.text || "");
+        reportText = response.text || "";
       }
 
+      setGeneratedReport(reportText);
       showStatus("Report generated!", "success");
       
       if (currentStudentId) {
@@ -1000,7 +976,7 @@ Write in clear paragraphs. The final report should read exactly like something L
     }
   };
 
-  // *** CHANGED: refineReport now routes to Claude or ChatGPT ***
+  // refineReport routes to Claude, ChatGPT, or Gemini
   const refineReport = async () => {
     if (!refinementInput.trim()) return;
     if (conversationHistoryRef.current.length === 0 && !chatSessionRef.current) return;
@@ -1011,68 +987,39 @@ Write in clear paragraphs. The final report should read exactly like something L
     const refinementMessage = `REFINEMENT INSTRUCTION: ${refinementInput}\n\nUpdate the report based on this instruction while maintaining all previous rules and voice lock.`;
 
     try {
+      let refined = '';
+
       if (selectedModel === 'claude') {
-        // --- Claude refinement ---
         const messages = [
           ...conversationHistoryRef.current,
           { role: 'user' as const, content: refinementMessage },
         ];
-
-        const response = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 8000,
-          temperature: 0.4,
-          system: systemPromptRef.current,
-          messages,
-        });
-
-        const refined = response.content
-          .filter(block => block.type === 'text')
-          .map(block => (block as any).text)
-          .join('');
-
+        refined = await callGenerateProxy('claude', systemPromptRef.current, messages);
         conversationHistoryRef.current = [
           ...messages,
           { role: 'assistant', content: refined },
         ];
 
-        setGeneratedReport(refined);
-
       } else if (selectedModel === 'chatgpt') {
-        // --- ChatGPT refinement ---
-        const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-          { role: 'system', content: systemPromptRef.current },
-          ...conversationHistoryRef.current.map(m => ({
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-          })),
-          { role: 'user', content: refinementMessage },
-        ];
-
-        const response = await openai.chat.completions.create({
-          model: 'gpt-4o',
-          temperature: 0.4,
-          messages,
-        });
-
-        const refined = response.choices[0].message.content || '';
-
-        conversationHistoryRef.current = [
+        const messages = [
           ...conversationHistoryRef.current,
-          { role: 'user', content: refinementMessage },
+          { role: 'user' as const, content: refinementMessage },
+        ];
+        refined = await callGenerateProxy('chatgpt', systemPromptRef.current, messages);
+        conversationHistoryRef.current = [
+          ...messages,
           { role: 'assistant', content: refined },
         ];
 
-        setGeneratedReport(refined);
-
       } else if (chatSessionRef.current) {
-        // Fallback: legacy Gemini session still active
+        // Gemini session
         const response = await chatSessionRef.current.sendMessage({ 
-          message: `REFINEMENT INSTRUCTION: ${refinementInput}\n\nUpdate the report based on this instruction while maintaining all previous rules and voice lock.` 
+          message: refinementMessage
         });
-        setGeneratedReport(response.text || "");
+        refined = response.text || "";
       }
 
+      setGeneratedReport(refined);
       setRefinementInput('');
       showStatus("Report refined!", "success");
 
@@ -1333,7 +1280,7 @@ Write in clear paragraphs. The final report should read exactly like something L
         
         <div className="flex items-center gap-4">
 
-          {/* *** ADDED: Model selector toggle *** */}
+          {/* Model selector toggle */}
           <div className="flex items-center gap-1 bg-white/15 rounded-full p-1 border border-white/20">
             <button
               onClick={() => setSelectedModel('claude')}
@@ -1367,7 +1314,7 @@ Write in clear paragraphs. The final report should read exactly like something L
                   ? "bg-white text-sage-700 shadow-sm"
                   : "text-white/70 hover:text-white"
               )}
-              title="Gemini (original)"
+              title="Gemini"
             >
               Gemini
             </button>
@@ -1759,7 +1706,6 @@ Write in clear paragraphs. The final report should read exactly like something L
               ) : (
                 <Wand2 className="w-5 h-5" />
               )}
-              {/* *** CHANGED: button label shows active model *** */}
               {isGenerating
                 ? `${selectedModel === 'claude' ? 'Claude' : selectedModel === 'chatgpt' ? 'ChatGPT' : 'Gemini'} is writing...`
                 : `Generate with ${selectedModel === 'claude' ? 'Claude' : selectedModel === 'chatgpt' ? 'ChatGPT' : 'Gemini'}`}
@@ -1788,7 +1734,6 @@ Write in clear paragraphs. The final report should read exactly like something L
           <div className="h-14 border-b border-sage-200 flex items-center justify-between px-8 shrink-0 bg-white">
             <div className="flex items-center gap-2 text-sage-700">
               <FileText className="w-4 h-4" />
-              {/* *** CHANGED: show active model in output header *** */}
               <span className="text-sm font-bold">
                 Generated Output
                 {generatedReport && (
@@ -1853,7 +1798,6 @@ Write in clear paragraphs. The final report should read exactly like something L
                       <div className="w-12 h-12 border-4 border-sage-200 border-t-sage-600 rounded-full animate-spin" />
                       <Wand2 className="w-5 h-5 text-sage-600 absolute inset-0 m-auto" />
                     </div>
-                    {/* *** CHANGED: dynamic loading text *** */}
                     <p className="text-sm font-medium text-sage-600 animate-pulse">
                       {selectedModel === 'claude' ? 'Claude' : selectedModel === 'chatgpt' ? 'ChatGPT' : 'Gemini'} is writing...
                     </p>
@@ -2201,7 +2145,7 @@ Write in clear paragraphs. The final report should read exactly like something L
               </div>
               
               <div className="p-6 bg-sage-50 border-t border-sage-100 flex justify-center">
-                <p className="text-[10px] text-sage-400">MET Report Writer v1.3.0 • Built for Lisa Work</p>
+                <p className="text-[10px] text-sage-400">MET Report Writer v1.4.0 • Built for Lisa Work</p>
               </div>
             </motion.div>
           </div>
