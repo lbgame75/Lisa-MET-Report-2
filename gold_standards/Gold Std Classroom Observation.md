@@ -1,0 +1,16 @@
+School Psychologist Classroom Observation (10/20/25, 25 minutes)  
+Jaiden was observed during his Reading and Writing Workshop class.  He was seated at a table with two peers and he had his materials (pencil, paper) within reach. The lesson focused on evaluating journalism in traditional and social media formats. During the first part of the observation, students were instructed to watch a short video and record the five core values of journalism. Jaiden initially picked up his pencil but set it down shortly after the video began. Within the first thirty seconds, he left his seat to throw something away and missed the first portion of the content. Upon returning, he appeared distracted, stretching and looking around, while peers were writing responses. He did not record any of the five core values presented in the video but turned in his paper with the class when instructed.
+
+Immediately afterward, the teacher distributed New York Times magazines for the next activity, which centered on comparing news influencers to traditional journalists. At 10:12, Jaiden signed out to use the restroom and was absent for approximately five minutes while the teacher introduced the new article and led an initial class discussion. When he returned at 10:17, he did not immediately re-engage. Although prompted to open the magazine to the correct page, he looked at the cover briefly and then set it aside. Jaiden picked up the magazine a minute later, when the teacher said to the class, “Now we are on page 7” and he opened to the correct page. Later, when the teacher referenced a chart within the article, Jaiden appeared to locate it and answered one question aloud appropriately. He also asked a clarifying question about whether he was looking at the correct chart, showing that he was attending momentarily to directions.
+
+During a brief table discussion, Jaiden’s group spoke primarily about unrelated topics (tennis shoes and shoe sizes) rather than the assigned question on social media credibility. Throughout the lesson, he displayed cooperative behavior, interacted politely with peers, and maintained visual attention toward the whiteboard when videos were playing. However, engagement with written materials and academic output was minimal. He was not disruptive or oppositional but was generally disengaged for much of the 25-minute period.
+
+A systematic time-sampling method was used during the observation to quantify Jaiden’s engagement compared to peers: 
+
+| Behavior Category | Jaiden | Peer Average |
+| :---- | :---: | :---: |
+| On-Task | 36% | 68% |
+| Off-Task | 40% | 20% |
+| Out-of-Seat | 24% | 12% |
+
+Across the 25-minute observation, Jaiden was on-task during approximately one-third of observed intervals—about half the rate of peers. His off-task and out-of-seat behaviors occurred at roughly double the peer frequency. These data suggest reduced sustained attention and task engagement relative to classmates, particularly during literacy-based instruction requiring simultaneous listening and writing.

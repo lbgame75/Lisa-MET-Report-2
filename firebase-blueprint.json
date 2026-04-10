@@ -1,0 +1,45 @@
+{
+  "entities": {
+    "Student": {
+      "title": "Student",
+      "description": "A student case record containing report data and metadata.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier for the student case." },
+        "name": { "type": "string", "description": "The name of the student." },
+        "clinicalDirection": { "type": "string", "description": "Clinical direction for the report." },
+        "brainDump": { "type": "string", "description": "Voice brain dump or notes." },
+        "generatedReport": { "type": "string", "description": "The current state of the generated report." },
+        "selectedLibraryItems": { "type": "array", "items": { "type": "string" }, "description": "IDs of selected library items." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "ownerId": { "type": "string", "description": "UID of the user who owns this record." }
+      },
+      "required": ["name", "ownerId"]
+    },
+    "LibraryItem": {
+      "title": "LibraryItem",
+      "description": "A reusable component for report generation (voice, instruction, skill, etc.).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "content": { "type": "string" },
+        "category": { "type": "string", "enum": ["voice", "instructions", "skills", "gold", "references"] },
+        "ownerId": { "type": "string" },
+        "isPublic": { "type": "boolean", "description": "Whether this item is shared with all users." }
+      },
+      "required": ["name", "content", "category", "ownerId"]
+    }
+  },
+  "firestore": {
+    "/students/{studentId}": {
+      "schema": "Student",
+      "description": "Collection of student case records."
+    },
+    "/library/{itemId}": {
+      "schema": "LibraryItem",
+      "description": "Collection of reusable library items."
+    }
+  }
+}

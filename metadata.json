@@ -1,0 +1,5 @@
+{
+  "name": "MET Report Writer",
+  "description": "Structured Multidisciplinary Evaluation Team (MET) report generation with voice transcription and document analysis.",
+  "requestFramePermissions": ["microphone"]
+}
