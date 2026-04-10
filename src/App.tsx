@@ -970,7 +970,7 @@ Write in clear paragraphs. The final report should read exactly like something L
       }
     } catch (err) {
       console.error("Generation error:", err);
-      showStatus("Failed to generate report", "error");
+      showStatus(`Failed: ${err instanceof Error ? err.message : String(err)}`, "error");
     } finally {
       setIsGenerating(false);
     }
